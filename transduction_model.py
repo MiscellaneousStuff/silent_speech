@@ -1,5 +1,11 @@
-# NOTE: This ignores the librosa logs
+# Additional imports
+import neptune.new as neptune
 import warnings
+import random
+import matplotlib.pyplot as plt
+from matplotlib import cm
+
+# NOTE: This ignores the librosa logs
 warnings.simplefilter(action = "ignore", category = FutureWarning)
 
 import os
@@ -39,6 +45,41 @@ flags.DEFINE_string('pretrained_wavenet_model', None, '')
 flags.DEFINE_string('output_directory', None, '')
 flags.DEFINE_bool('debug', False, '')
 flags.DEFINE_bool('amp', False, '')
+flags.DEFINE_string("neptune_token", None, "(Optional) Neptune.ai logging token")
+flags.DEFINE_string("neptune_project", None, "(Optional) Neptune.ai project name")
+flags.DEFINE_integer("n_epochs", 80, "")
+flags.DEFINE_integer("random_seed", 1, "")
+flags.DEFINE_float('recon_loss_weight', 0.1, 'weight of Ev reconstruction prediction loss')
+flags.DEFINE_integer('transformer_nheads', 8, '')
+
+"""START - ADDITIONAL UTILITY FUNCTIONS"""
+
+def plot_mel_spectrograms(pred, y, epoch_idx=None):
+    fig, ax = plt.subplots(2)
+
+    epoch_txt = "" if epoch_idx==None else f", Epoch: {epoch_idx}"
+
+    ax[0].set_title(f"Mel Spectogram (Predicted){epoch_txt}")
+    pred = np.swapaxes(pred, 0, 1)
+    cax = ax[0].imshow(pred, interpolation='nearest', cmap=cm.coolwarm, origin='lower')
+
+    ax[1].set_title(f"Mel Spectogram (Actual){epoch_txt}")
+    y = np.swapaxes(y, 0, 1)
+    cax = ax[1].imshow(y, interpolation='nearest', cmap=cm.coolwarm, origin='lower')
+
+    return fig
+
+def stack_mel_spectrogram(data):
+    data = data.cpu().float().detach().numpy()
+
+    # Loop over each second of `audio_features`
+    new_data = data[0]
+    for i in range(1, data.shape[0]):
+        new_data = np.vstack((new_data, data[i]))
+    
+    return new_data
+
+"""END - ADDITIONAL UTILITY FUNCTIONS"""
 
 class ResBlock(nn.Module):
     def __init__(self, num_ins, num_outs, stride=1):
@@ -69,7 +110,7 @@ class ResBlock(nn.Module):
         return F.relu(x + res)
 
 class Model(nn.Module):
-    def __init__(self, num_ins, num_outs, num_aux_outs, num_sessions, reconstruction_loss=False):
+    def __init__(self, num_ins, num_outs, num_aux_outs, num_recon_outs, num_sessions, reconstruction_loss=False):
         super().__init__()
 
         self.conv_blocks = nn.Sequential(
@@ -84,11 +125,16 @@ class Model(nn.Module):
             self.session_emb = nn.Embedding(num_sessions, emb_size)
             self.w_emb = nn.Linear(emb_size, FLAGS.model_size)
 
-        encoder_layer = TransformerEncoderLayer(d_model=FLAGS.model_size, nhead=8, relative_positional=True, relative_positional_distance=100, dim_feedforward=3072)
+        encoder_layer = TransformerEncoderLayer(
+            d_model=FLAGS.model_size,
+            nhead=FLAGS.transformer_nheads,
+            relative_positional=True,
+            relative_positional_distance=100,
+            dim_feedforward=3072)
         self.transformer = nn.TransformerEncoder(encoder_layer, FLAGS.num_layers)
-        self.w_out = nn.Linear(FLAGS.model_size, num_outs)
-        self.w_aux = nn.Linear(FLAGS.model_size, num_aux_outs)
-
+        self.w_out   = nn.Linear(FLAGS.model_size, num_outs)
+        self.w_aux   = nn.Linear(FLAGS.model_size, num_aux_outs)
+        self.w_recon = nn.Linear(FLAGS.model_size, num_recon_outs)
         self.reconstruction_loss = reconstruction_loss
 
     def forward(self, x_feat, x_raw, session_ids):
@@ -108,30 +154,61 @@ class Model(nn.Module):
         x = x.transpose(0,1) # put time first
         x = self.transformer(x)
         x = x.transpose(0,1)
-        return self.w_out(x), self.w_aux(x)
 
-def test(model, testset, device):
+        return self.w_out(x), self.w_aux(x), self.w_recon(x)
+
+def test(model, testset, device, epoch, run):
     model.eval()
 
     dataloader = torch.utils.data.DataLoader(testset, batch_size=32, collate_fn=testset.collate_fixed_length)
     losses = []
     accuracies = []
     phoneme_confusion = np.zeros((len(phoneme_inventory),len(phoneme_inventory)))
+    recon_losses = []
+
+    logged = False
+
     with torch.no_grad():
         for example in dataloader:
             X = example['emg'].to(device)
             X_raw = example['raw_emg'].to(device)
             sess = example['session_ids'].to(device)
 
-            pred, phoneme_pred = model(X, X_raw, sess)
+            with torch.autocast(
+                enabled=FLAGS.amp,
+                dtype=torch.bfloat16,
+                device_type="cuda"):
 
-            loss, phon_acc = dtw_loss(pred, phoneme_pred, example, True, phoneme_confusion)
-            losses.append(loss.item())
+                pred, phoneme_pred, X_recon = model(X, X_raw, sess)
+
+                if not logged:
+                    audio_features = example['audio_features']
+                    plot_pred = decollate_tensor(pred, example['lengths'])
+                    plot_y = decollate_tensor(audio_features, example['audio_feature_lengths'])
+                    
+                    print("plot_pred SHAPE:", plot_pred[0].shape)
+                    # Log predicted mel_spectrogram
+                    fig = plot_mel_spectrograms(
+                            stack_mel_spectrogram(plot_pred[0]),
+                            stack_mel_spectrogram(plot_y[0]),
+                            epoch_idx=epoch)
+
+                    fname = f"cur_epoch_{epoch}.png"
+                    fig.savefig(fname)
+                    if run:
+                        run["model/visualisation"].upload(fname)
+                        run[f"model/visualisation_epoch_{epoch}"].upload(fname)
+                    
+                    logged = True
+
+                loss, phon_acc, recon_loss = dtw_loss(pred, phoneme_pred, X_recon, example, True, phoneme_confusion)
+                losses.append(loss.item())
+                recon_losses.append(recon_loss.item())
 
             accuracies.append(phon_acc)
 
     model.train()
-    return np.mean(losses), np.mean(accuracies), phoneme_confusion #TODO size-weight average
+    return np.mean(losses), np.mean(accuracies), phoneme_confusion, np.mean(recon_losses) #TODO size-weight average
 
 """
 def save_output(model, datapoint, filename, device, gold_mfcc=False):
@@ -156,10 +233,14 @@ def save_output(model, datapoint, filename, device, gold_mfcc=False):
     model.train()
 """
 
-def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phoneme_confusion=None):
+def dtw_loss(predictions, phoneme_predictions, X_recon, example, phoneme_eval=False, phoneme_confusion=None):
+    # device = predictions.device()
     device = predictions.device
+    inputs = decollate_tensor(example['raw_emg'], example['lengths'])
+
     predictions = decollate_tensor(predictions, example['lengths'])
     phoneme_predictions = decollate_tensor(phoneme_predictions, example['lengths'])
+    recon_predictions = decollate_tensor(X_recon, example['lengths'])
 
     audio_features = example['audio_features'].to(device)
 
@@ -168,9 +249,10 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
     audio_features = decollate_tensor(audio_features, example['audio_feature_lengths'])
 
     losses = []
+    recon_losses = []
     correct_phones = 0
     total_length = 0
-    for pred, y, pred_phone, y_phone, silent in zip(predictions, audio_features, phoneme_predictions, phoneme_targets, example['silent']):
+    for pred, y, pred_phone, y_phone, recon, y_recon, silent in zip(predictions, audio_features, phoneme_predictions, phoneme_targets, recon_predictions, inputs, example['silent']):
         assert len(pred.size()) == 2 and len(y.size()) == 2
         y_phone = y_phone.to(device)
 
@@ -182,11 +264,13 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
             # phone_probs (seq1_len, seq2_len)
             pred_phone = F.log_softmax(pred_phone, -1)
             phone_lprobs = pred_phone[:,y_phone]
+            recon_loss   = F.mse_loss(recon.to(device), y_recon.to(device))
 
-            costs = costs + FLAGS.phoneme_loss_weight * -phone_lprobs
+            costs = costs + \
+                    FLAGS.phoneme_loss_weight * -phone_lprobs + \
+                    FLAGS.recon_loss_weight * recon_loss
 
             alignment = align_from_distances(costs.T.cpu().detach().numpy())
-
             loss = costs[alignment,range(len(alignment))].sum()
 
             if phoneme_eval:
@@ -204,7 +288,11 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
 
             assert len(pred_phone.size()) == 2 and len(y_phone.size()) == 1
             phoneme_loss = F.cross_entropy(pred_phone, y_phone, reduction='sum')
-            loss = dists.cpu().sum() + FLAGS.phoneme_loss_weight * phoneme_loss.cpu()
+            recon_loss   = F.mse_loss(recon.to(device), y_recon.to(device))
+
+            loss = dists.cpu().sum() + \
+                   FLAGS.phoneme_loss_weight * phoneme_loss.cpu() + \
+                   FLAGS.recon_loss_weight * recon_loss.cpu()
 
             if phoneme_eval:
                 pred_phone = pred_phone.argmax(-1)
@@ -214,19 +302,33 @@ def dtw_loss(predictions, phoneme_predictions, example, phoneme_eval=False, phon
                     phoneme_confusion[p, t] += 1
 
         losses.append(loss)
+        recon_losses.append(recon_loss)
         total_length += y.size(0)
 
-    return sum(losses)/total_length, correct_phones/total_length
+    return sum(losses)/total_length, correct_phones/total_length, sum(recon_losses)/total_length
 
-def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
+def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80, run=None):
     if FLAGS.data_size_fraction >= 1:
         training_subset = trainset
     else:
-        training_subset = torch.utils.data.Subset(trainset, list(range(int(len(trainset)*FLAGS.data_size_fraction))))
-    dataloader = torch.utils.data.DataLoader(training_subset, pin_memory=(device=='cuda'), collate_fn=devset.collate_fixed_length, num_workers=8, batch_sampler=SizeAwareSampler(trainset, 256000))
+        training_subset = \
+            torch.utils.data.Subset(
+                trainset,
+                list(range(int(len(trainset)*FLAGS.data_size_fraction))))
+
+    dataloader = torch.utils.data.DataLoader(
+        training_subset, pin_memory=(device=='cuda'),
+        collate_fn=devset.collate_fixed_length,
+        num_workers=8,
+        batch_sampler=SizeAwareSampler(trainset, 256000))
 
     n_phones = len(phoneme_inventory)
-    model = Model(devset.num_features, devset.num_speech_features, n_phones, devset.num_sessions).to(device)
+    model = Model(num_ins=devset.num_features,
+                  num_outs=devset.num_speech_features,
+                  num_aux_outs=n_phones,
+                  num_recon_outs=8,
+                  num_sessions=devset.num_sessions,
+                  reconstruction_loss=(True if FLAGS.recon_loss_weight > 0.0 else False)).to(device)
 
     if FLAGS.start_training_from is not None:
         state_dict = torch.load(FLAGS.start_training_from)
@@ -251,12 +353,14 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
     batch_idx = 0
     for epoch_idx in range(n_epochs):
         losses = []
+        recon_losses = []
         for example in dataloader:
             optim.zero_grad()
             schedule_lr(batch_idx)
 
             X = example['emg'].to(device)
             X_raw = example['raw_emg'].to(device)
+            print("X_RAW SHAPE:", X_raw.shape)
             sess = example['session_ids'].to(device)
 
             with torch.autocast(
@@ -264,10 +368,11 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
                 dtype=torch.bfloat16,
                 device_type="cuda"):
 
-                pred, phoneme_pred = model(X, X_raw, sess)
+                pred, phoneme_pred, X_recon = model(X, X_raw, sess)
 
-                loss, _ = dtw_loss(pred, phoneme_pred, example)
+                loss, _, recon_loss = dtw_loss(pred, phoneme_pred, X_recon, example)
                 losses.append(loss.item())
+                recon_losses.append(recon_loss.item())
 
             scaler.scale(loss).backward()
             scaler.step(optim)
@@ -279,10 +384,18 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
             batch_idx += 1
 
         train_loss = np.mean(losses)
-        val, phoneme_acc, _ = test(model, devset, device)
+        recon_loss = np.mean(recon_losses)
+        val, phoneme_acc, _, recon_loss = test(model, devset, device, epoch_idx, run)
         lr_sched.step(val)
-        logging.info(f'finished epoch {epoch_idx+1} - validation loss: {val:.4f} training loss: {train_loss:.4f} phoneme accuracy: {phoneme_acc*100:.2f}')
-        torch.save(model.state_dict(), os.path.join(FLAGS.output_directory,'model.pt'))
+        
+        if run:
+            run["val_loss"].log(val)
+            run["train_loss"].log(train_loss)
+            run["recon_loss"].log(recon_loss)
+            run["phoneme_acc"].log(phoneme_acc*100)
+
+        logging.info(f'finished epoch {epoch_idx+1} - validation loss: {val:.4f} training loss: {train_loss:.4f} recon loss: {recon_loss:.4f} phoneme accuracy: {phoneme_acc*100:.2f}')
+        torch.save(model.state_dict(), os.path.join(FLAGS.output_directory, 'closed_vocab_model.pt'))
 
         """
         if save_sound_outputs:
@@ -302,6 +415,35 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80):
     return model
 
 def main():
+    if FLAGS.neptune_project and FLAGS.neptune_token:
+        run = neptune.init(project=FLAGS.neptune_project,
+                        api_token=FLAGS.neptune_token)
+    else:
+        run = None
+
+    if run:
+        run["hparams"] = {
+            "model_size": FLAGS.model_size,
+            "num_layers": FLAGS.num_layers,
+            "batch_size": FLAGS.batch_size,
+            "learning_rate": FLAGS.learning_rate,
+            "phoneme_loss_weight": FLAGS.phoneme_loss_weight,
+            "recon_loss_weight": FLAGS.recon_loss_weight,
+            "l2": FLAGS.l2,
+            "data_size_fraction": FLAGS.data_size_fraction,
+            "learning_rate_patience": FLAGS.learning_rate_patience,
+            "learning_rate_warmup": FLAGS.learning_rate_warmup,
+            "n_epochs": FLAGS.n_epochs,
+            "random_seed": FLAGS.random_seed,
+            "mel_spectrogram": FLAGS.mel_spectrogram,
+            "transformer_nheads": FLAGS.transformer_nheads,
+            "normalizers_file": FLAGS.normalizers_file,
+        }
+
+    random.seed(FLAGS.random_seed)
+    torch.manual_seed(FLAGS.random_seed)
+    np.random.seed(FLAGS.random_seed)
+
     os.makedirs(FLAGS.output_directory, exist_ok=True)
     logging.basicConfig(handlers=[
             logging.FileHandler(os.path.join(FLAGS.output_directory, 'log.txt'), 'w'),
@@ -320,8 +462,15 @@ def main():
 
     device = 'cuda' if torch.cuda.is_available() and not FLAGS.debug else 'cpu'
 
-    model = train_model(trainset, devset, device, save_sound_outputs=(FLAGS.pretrained_wavenet_model is not None))
+    model = train_model(trainset,
+                        devset,
+                        device,
+                        save_sound_outputs=(FLAGS.pretrained_wavenet_model is not None),
+                        n_epochs=FLAGS.n_epochs,
+                        run=run)
+
+    if run:
+        run.stop()
 
 if __name__ == '__main__':
-    FLAGS(sys.argv)
-    main()
+    app.run(main)
