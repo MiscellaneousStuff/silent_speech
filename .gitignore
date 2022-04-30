@@ -1,1 +1,6 @@
 /pred_audio
+/emg_data
+/models
+/text_alignments
+.neptune
+__pycache__/

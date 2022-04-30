@@ -61,3 +61,26 @@ python evaluate.py --models ./models/transduction_model/model.pt --pretrained_wa
 ```
 
 By default, the scripts now use a larger validation set than was used in the original EMNLP 2020 paper, since the small size of the original set gave WER evaluations a high variance.  If you want to use the original validation set you can add the flag `--testset_file testset_origdev.json`.
+
+## ADDITIONAL CONTRIBUTIONS
+
+### TRAIN TRANSDUCTION
+```bash
+python3 transduction_model.py --output_directory "./models/transduction_model/" --batch_size 32 --amp --model_size 512 --num_layers 3 --testset_file "testset_closed.json" --n_epochs 80 --recon_loss_weight 0.0 --normalizers_file "normalizers_mel_spec.pkl" --mel_spectrogram --neptune_project "" --neptune_token ""
+```
+
+### SAVE MEL_SPECTROGRAM PREDS
+```bash
+python3 save_preds.py --checkpoint_path "./models/transduction_model/closed_vocab_model.pt" --mel_spectrogram --normalizers_file "normalizers_mel_spec.pkl" --amp --model_size 512 --num_layers 3 --testset_file "testset_closed.json" --recon_loss_weight 0.0
+```
+```bash
+python3 save_preds.py --checkpoint_path "./models/transduction_model/open_vocab_parallel_model.pt" --mel_spectrogram --normalizers_file "normalizers_mel_spec.pkl" --amp --model_size 512 --num_layers 3 --testset_file "testset_largedev.json" --recon_loss_weight 0.0
+```
+
+### GEN PREDS METADATA FILE FOR DS2 ASR MODEL
+```bash
+python3 gen_dgaddy_dataset.py --emg_data_dir "/mnt/datasets/semg_silent_speech/emg_data" --semg_transduction_preds_path "/home/joe/projects/silent_speech/pred_audio/closed_vocab"
+```
+```bash
+python3 gen_dgaddy_dataset.py --emg_data_dir "/mnt/datasets/semg_silent_speech/emg_data" --semg_transduction_preds_path "/home/joe/projects/silent_speech/pred_audio/open_vocab_parallel"
+```

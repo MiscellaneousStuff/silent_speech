@@ -23,10 +23,20 @@ from data_utils import load_audio, get_emg_features, FeatureNormalizer, combine_
 from absl import flags
 FLAGS = flags.FLAGS
 flags.DEFINE_list('remove_channels', [], 'channels to remove')
-flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
-flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data','./emg_data/nonparallel_data'], 'voiced data locations')
 flags.DEFINE_string('testset_file', 'testset_largedev.json', 'file with testset indices')
 flags.DEFINE_string('text_align_directory', 'text_alignments', 'directory with alignment files')
+
+flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
+flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data', './emg_data/nonparallel_data'], 'voiced data locations')
+
+# flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
+# flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data','./emg_data/nonparallel_data'], 'voiced data locations')
+
+# flags.DEFINE_list('silent_data_directories', ['./emg_data/closed_vocab/silent'], 'silent data locations')
+# flags.DEFINE_list('voiced_data_directories', ['./emg_data/closed_vocab/voiced'], 'voiced data locations')
+
+# flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
+# flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data'], 'voiced data locations')
 
 def remove_drift(signal, fs):
     b, a = scipy.signal.butter(3, 2, 'highpass', fs=fs)
@@ -208,6 +218,7 @@ class EMGDataset(torch.utils.data.Dataset):
                                 location = (info['book'], info['sentence_index'])
                                 self.voiced_data_locations[location] = (directory_info,int(idx_str))
 
+        print("eg len:", len(self.example_indices))
         self.example_indices.sort()
         random.seed(0)
         random.shuffle(self.example_indices)
@@ -316,4 +327,3 @@ if __name__ == '__main__':
     d = EMGDataset()
     for i in range(1000):
         d[i]
-

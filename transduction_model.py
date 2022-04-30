@@ -27,6 +27,8 @@ from transformer import TransformerEncoderLayer
 from data_utils import phoneme_inventory, decollate_tensor
 
 from absl import flags
+from absl import app
+
 FLAGS = flags.FLAGS
 flags.DEFINE_integer('model_size', 768, 'number of hidden dimensions')
 flags.DEFINE_integer('num_layers', 6, 'number of layers')
@@ -374,6 +376,8 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80, 
                 losses.append(loss.item())
                 recon_losses.append(recon_loss.item())
 
+            print("LOSS:", loss)
+            loss = loss.to(device)
             scaler.scale(loss).backward()
             scaler.step(optim)
             scaler.update()
@@ -395,7 +399,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80, 
             run["phoneme_acc"].log(phoneme_acc*100)
 
         logging.info(f'finished epoch {epoch_idx+1} - validation loss: {val:.4f} training loss: {train_loss:.4f} recon loss: {recon_loss:.4f} phoneme accuracy: {phoneme_acc*100:.2f}')
-        torch.save(model.state_dict(), os.path.join(FLAGS.output_directory, 'closed_vocab_model.pt'))
+        torch.save(model.state_dict(), os.path.join(FLAGS.output_directory, 'full_model.pt'))
 
         """
         if save_sound_outputs:
@@ -414,7 +418,7 @@ def train_model(trainset, devset, device, save_sound_outputs=True, n_epochs=80, 
 
     return model
 
-def main():
+def main(unused_argv):
     if FLAGS.neptune_project and FLAGS.neptune_token:
         run = neptune.init(project=FLAGS.neptune_project,
                         api_token=FLAGS.neptune_token)

@@ -35,4 +35,3 @@ def align_from_distances(distance_matrix, debug=False):
         plt.show()
 
     return results
-
