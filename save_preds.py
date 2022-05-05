@@ -15,6 +15,7 @@ from absl import app
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string('checkpoint_path', None, 'Path to model checkpoint')
+flags.DEFINE_bool('closed_only', False, 'Uses only the closed vocab dataset')
 flags.mark_flag_as_required("checkpoint_path")
 
 def main(unused_argv):
@@ -59,16 +60,24 @@ def main(unused_argv):
                     pred = pred.cpu()
                     pred = pred.float().detach()
 
-                if silent:
-                    torch.save(pred, f"./pred_audio/open_vocab_parallel/silent/{sentence_idx}")
-                    print("PARALLEL SILENT", datapoint["book_location"], pred.dtype)
-                else:
-                    if datapoint["book_location"][0] == "books/War_of_the_Worlds.txt":
-                        torch.save(pred, f"./pred_audio/open_vocab_parallel/voiced/{sentence_idx}")
-                        print("PARALLEL VOICED", datapoint["book_location"], pred.dtype)
+                if FLAGS.closed_only:
+                    if silent:
+                        torch.save(pred, f"./pred_audio/closed_vocab/silent/{sentence_idx}")
+                        print("CLOSED VOCAB SILENT", datapoint["book_location"], pred.dtype)
                     else:
-                        torch.save(pred, f"./pred_audio/open_vocab_non_parallel/voiced/{sentence_idx}")
-                        print("NON_PARALLEL VOICED", datapoint["book_location"], pred.dtype)
+                        torch.save(pred, f"./pred_audio/closed_vocab/voiced/{sentence_idx}")
+                        print("CLOSED VOCAB VOICED", datapoint["book_location"], pred.dtype)
+                else:
+                    if silent:
+                        torch.save(pred, f"./pred_audio/open_vocab_parallel/silent/{sentence_idx}")
+                        print("PARALLEL SILENT", datapoint["book_location"], pred.dtype)
+                    else:
+                        if datapoint["book_location"][0] == "books/War_of_the_Worlds.txt":
+                            torch.save(pred, f"./pred_audio/open_vocab_parallel/voiced/{sentence_idx}")
+                            print("PARALLEL VOICED", datapoint["book_location"], pred.dtype)
+                        else:
+                            torch.save(pred, f"./pred_audio/open_vocab_non_parallel/voiced/{sentence_idx}")
+                            print("NON_PARALLEL VOICED", datapoint["book_location"], pred.dtype)
 
 if __name__ == '__main__':
     app.run(main)
