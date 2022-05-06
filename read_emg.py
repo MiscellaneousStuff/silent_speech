@@ -26,14 +26,15 @@ flags.DEFINE_list('remove_channels', [], 'channels to remove')
 flags.DEFINE_string('testset_file', 'testset_largedev.json', 'file with testset indices')
 flags.DEFINE_string('text_align_directory', 'text_alignments', 'directory with alignment files')
 
-flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
-flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data', './emg_data/nonparallel_data'], 'voiced data locations')
+# flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
+# flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data', './emg_data/nonparallel_data'], 'voiced data locations')
 
 # flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
 # flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data','./emg_data/nonparallel_data'], 'voiced data locations')
 
-# flags.DEFINE_list('silent_data_directories', ['./emg_data/closed_vocab/silent'], 'silent data locations')
-# flags.DEFINE_list('voiced_data_directories', ['./emg_data/closed_vocab/voiced'], 'voiced data locations')
+# flags.DEFINE_list('silent_data_directories', [], 'silent data locations')
+flags.DEFINE_list('silent_data_directories', ['./emg_data/closed_vocab/silent'], 'silent data locations')
+flags.DEFINE_list('voiced_data_directories', ['./emg_data/closed_vocab/voiced'], 'voiced data locations')
 
 # flags.DEFINE_list('silent_data_directories', ['./emg_data/silent_parallel_data'], 'silent data locations')
 # flags.DEFINE_list('voiced_data_directories', ['./emg_data/voiced_parallel_data'], 'voiced data locations')

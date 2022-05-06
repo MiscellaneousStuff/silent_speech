@@ -64,6 +64,10 @@ By default, the scripts now use a larger validation set than was used in the ori
 
 ## ADDITIONAL CONTRIBUTIONS
 
+### PRETRAINED TRANSDUCTION MODEL
+
+Link to pre-trained model: [Google Drive](https://drive.google.com/file/d/10Oln3Wp7MMvnTT7fNOAQqHx8HnQ6e40F/view?usp=sharing)
+
 ### TRAIN TRANSDUCTION
 ```bash
 python3 transduction_model.py --output_directory "./models/transduction_model/" --batch_size 32 --amp --model_size 512 --num_layers 3 --testset_file "<choose_dataset_here>.json" --n_epochs 80 --recon_loss_weight 0.0 --normalizers_file "normalizers_mel_spec.pkl" --mel_spectrogram --neptune_project "" --neptune_token ""
